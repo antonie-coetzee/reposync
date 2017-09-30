@@ -3,9 +3,9 @@ package main
 import (
 	"gopkg.in/src-d/go-git.v4"
 	"os"
-	"fmt"
 	"gopkg.in/go-playground/webhooks.v3"
 	"gopkg.in/go-playground/webhooks.v3/github"
+	log "github.com/Sirupsen/logrus"
 )
 
 func getenv(key, fallback string) string {
@@ -31,46 +31,60 @@ func main() {
 
 	err := webhooks.Run(hook, ":"+port, hookPath)
 	if err != nil {
-		fmt.Println(err)
+		log.Error(err)
 	}
 }
 
 func handlePush(payload interface{}, header webhooks.Header) {	
-	fmt.Println("push event received")
-	fmt.Printf("filtering on branch: '%s'\n", branch)	
+	log.Info("push event received")
+	log.Infof("filtering on branch: '%s'", branch)	
 	pl := payload.(github.PushPayload)		
 	refBranch := "refs/heads/" +  branch 		
 	if pl.Ref == refBranch {
-		fmt.Printf("pushed to '%s', processing\n", refBranch)
+		log.Infof("pushed to '%s', processing", refBranch)
 		defer func() { 
 			if r := recover(); r != nil {
-				fmt.Println("error:", r)
+				log.Error(r)
 			}
 		}()
-
+		log.Infof("checking if working directory exists at: %s", workingDir)
 		if val, _ := exists(workingDir); val {
-			fmt.Println("pulling latest changes")
-			r, _ := git.PlainOpen(workingDir)
-			w, _ := r.Worktree()
-			err := w.Pull(&git.PullOptions{RemoteName: "origin"})
-			if err != nil && err.Error() == "already up-to-date"{
-				fmt.Println("already up-to-date")
+			log.Info("working directory exists")
+			r, err := git.PlainOpen(workingDir)
+			if err != nil && err.Error() == "repository not exists" {
+				log.Error(err)
+				log.Warn("cleaning working directory")
+				os.RemoveAll(workingDir)
+				clone()
 				return
 			}
-			fmt.Println("working directory now up-to-date")
+			log.Info("valid repository detected")
+			w, _ := r.Worktree()
+			log.Info("hard resetting working directory")
+			w.Reset(&git.ResetOptions{Mode: git.HardReset})
+			log.Info("pulling latest changes")
+			err = w.Pull(&git.PullOptions{RemoteName: "origin"})
+			if err != nil && err.Error() == "already up-to-date"{
+				log.Info("already up-to-date")
+				return
+			}
+			log.Info("working directory now up-to-date")
 		}else{
-			fmt.Println("cloning repository")
-			git.PlainClone(workingDir, false, &git.CloneOptions{
-				URL:repoURL,
-				Progress: os.Stdout,
-			})
-			fmt.Println("working directory now up-to-date")
+			clone()
 		}
 	}else{
-		fmt.Printf("pushed to '%s', not processing\n", pl.Ref)
+		log.Infof("pushed to '%s', not processing", pl.Ref)
 	}
 }
 
+func clone() {
+	log.Info("cloning repository")
+	git.PlainClone(workingDir, false, &git.CloneOptions{
+		URL:repoURL,
+		Progress: os.Stdout,
+	})
+	log.Info("working directory now up-to-date")	
+}
 
 func exists(path string) (bool, error) {
 	_, err := os.Stat(path)
